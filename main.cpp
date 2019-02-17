@@ -344,7 +344,10 @@ static int parse_parametrs(int argc, const char *argv[],
 
 static void _main(int argc, const char *argv[]) {
   bench_options settings;
-
+  settings.sec = 0;
+  settings.threads = 0;
+  settings.block_size = 0;
+  
   if (0 != parse_parametrs(argc, argv, &settings)) {
     print_help();
   }
