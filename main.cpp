@@ -11,15 +11,16 @@
 #else
 #include <sys/random.h>
 #endif
+#include <system_error>
 #include <thread>
 #include <vector>
-#include <system_error>
 
 // TODO: RMOVE IT !
 #include <json/json.h>
 
 #include "mysignals.h"
 #include "radosutil.h"
+#include <getopt.h>
 
 using namespace librados;
 using namespace std;
@@ -36,6 +37,15 @@ template <class T> static double dur2msec(const T &dur) {
 template <class T> static uint64_t dur2nsec(const T &dur) {
   return duration_cast<duration<uint64_t, nano>>(dur).count();
 }
+
+struct bench_options {
+  string pool;
+  string mode;
+  string specific_bench_item;
+  unsigned int threads;
+  unsigned int secs;
+  size_t block_size;
+};
 
 template <class T>
 static void print_breakdown(const vector<T> &summary, size_t thread_count,
@@ -228,35 +238,126 @@ static void do_bench(unsigned int secs, const vector<string> &names,
   print_breakdown(summary, names.size(), block_size);
 }
 
-static void _main(int argc, const char *argv[]) {
-  struct {
-    string pool;
-    string mode;
-    string specific_bench_item;
-    unsigned int threads;
-    unsigned int secs;
-    size_t block_size;
-  } settings;
+static void print_help() {
+  std::cout << "--pool-name <string>            Pool name\n"
+               "--mode <string>                 Set mode value. Valide value: "
+               "\"host\", \"osd\"\n"
+               "--specific-bench-item <string>  Set specific bench item. Like "
+               "a osd.14, ceph-node-01, etc\n"
+               "--block-size <int>              Set block size value in bytes. "
+               "Default 4096 * 1024 byte\n"
+               "--seconds <int>                 Default 10 seconds\n"
+               "--threads <int>                 Default 1 thread\n"
+               "--help                          Show help\n";
+  //<< std::endl;
+}
 
-  switch (argc) {
-  case 3:
-    settings.pool = argv[1];
-    settings.mode = argv[2];
-    break;
-  case 4:
-    settings.pool = argv[1];
-    settings.mode = argv[2];
-    settings.specific_bench_item = argv[3];
-    break;
-  default:
-    cerr << "Usage: " << argv[0]
-         << " [poolname] [mode=host|osd] <specific item name to test>" << endl;
-    throw "Wrong cmdline";
+static int parse_parametrs(int argc, const char *argv[],
+                           bench_options *settings) {
+  const char *const short_opts = "p:m:i:b:s:t:h";
+  int index = 0;
+  const option long_opts[] = {
+      {"help", no_argument, nullptr, 'h'},
+      {"pool-name", required_argument, nullptr, 'p'},
+      {"mode", required_argument, nullptr, 'm'},
+      {"specific-bench-item", required_argument, nullptr, 'i'},
+      {"block-size", required_argument, 0, 'b'},
+      {"seconds", required_argument, 0, 's'},
+      {"threads", required_argument, 0, 't'},
+      {nullptr, no_argument, nullptr, 0}};
+
+  while (true) {
+    const auto opt = getopt_long_only(argc, (char *const *)argv, short_opts,
+                                      long_opts, &index);
+
+    if (-1 == opt)
+      break;
+    switch (opt) {
+    case 'p':
+      try {
+        settings->pool = std::string(optarg);
+        std::cout << "Poolname:\t" << settings->pool << std::endl;
+      } catch (const std::invalid_argument &obj) {
+        std::cerr << "Wrong value for option --pool-name" << std::endl;
+        return (1);
+      }
+      break;
+
+    case 'm':
+      try {
+        settings->mode = std::string(optarg);
+        std::cout << "Mode:\t\t" << settings->mode << std::endl;
+      } catch (const std::exception &obj) {
+        std::cerr << "Wrong value for option --mode" << std::endl;
+        return (1);
+      }
+      break;
+    case 'i':
+      try {
+        settings->specific_bench_item = std::string(optarg);
+        std::cout << "Specific item name:\t" << settings->specific_bench_item
+                  << std::endl;
+      } catch (const std::exception &obj) {
+        std::cerr << "Wrong value for option --specific-bench-item"
+                  << std::endl;
+        return (1);
+      }
+      break;
+    case 'b':
+      try {
+        settings->block_size = std::stoull(optarg);
+        std::cout << "Block size:\t" << settings->block_size << std::endl;
+      } catch (const std::exception &obj) {
+        std::cerr << "Wrong value for option --block-size" << std::endl;
+        return (1);
+      }
+      break;
+    case 's':
+      try {
+        settings->secs = std::stoul(optarg);
+        std::cout << "Seconds:\t" << settings->secs << std::endl;
+      } catch (const std::exception &obj) {
+        std::cerr << "Wrong value for option --seconds" << std::endl;
+        return (1);
+      }
+      break;
+    case 't':
+      try {
+        settings->threads = std::stoul(optarg);
+        std::cout << "Threads:\t" << settings->threads << std::endl;
+      } catch (const std::exception &obj) {
+        std::cerr << "Wrong value for option --threads" << std::endl;
+        return (1);
+      }
+      break;
+
+    case 'h': // -h or --help
+    case '?': // Unrecognized option
+    default:
+      print_help();
+      exit(0);
+      break;
+    }
+  }
+  return 0;
+}
+
+static void _main(int argc, const char *argv[]) {
+  bench_options settings;
+
+  if (0 != parse_parametrs(argc, argv, &settings)) {
+    print_help();
   }
 
-  settings.secs = 10;
-  settings.threads = 1;
-  settings.block_size = 4096 * 1024;
+  if (0 == settings.secs) {
+    settings.secs = 10;
+  }
+  if (0 == settings.threads) {
+    settings.threads = 1;
+  }
+  if (0 == settings.block_size) {
+    settings.block_size = 4096 * 1024;
+  }
 
   Rados rados;
   int err;
